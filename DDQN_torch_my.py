@@ -18,7 +18,7 @@ class DuelingDoubleDeepQNetwork(nn.Module):
 
         super(DuelingDoubleDeepQNetwork, self).__init__()
 
-        self.n_actions = n_actions  # self.n_actions = self.n_component + 1
+        self.n_actions = n_actions  # self.n_actions = self.n_component + 1 -> 2
         self.n_features = n_features # observation과 같음, 8임
         self.n_time = n_time
         self.lr = learning_rate
@@ -44,9 +44,13 @@ class DuelingDoubleDeepQNetwork(nn.Module):
         self.memory = np.zeros((self.memory_size, self.n_features + 1 + 1
                                 + self.n_features + self.n_lstm_state + self.n_lstm_state))
 
-        self._build_net()
+        # networks
+        self.eval_net = self._build_net()
+        self.target_net = self._build_net()
+        self.target_net.load_state_dict(self.eval_net.state_dict())
 
-        self.optimizer = optim.RMSprop(self.parameters(), lr=self.lr)
+        # eval_net만 손실계산 역전파 -> 파라미터 업데이트 한다. Algorithm Line 17
+        self.optimizer = optim.RMSprop(self.eval_net.parameters(), lr=self.lr)
         self.loss_func = nn.MSELoss()
 
         self.reward_store = list()
@@ -59,51 +63,49 @@ class DuelingDoubleDeepQNetwork(nn.Module):
         for _ in range(self.n_lstm_step):
             self.lstm_history.append(np.zeros([self.n_lstm_state]))
 
-        self.store_q_value = list()
+        self.store_q_value = list() # 얘가 안쓰는데 코드에서?
 
     def _build_net(self):
-        # 해당 네트워크를 bulid 할떼 파라미터(세타 E, T)가 생성되고, 이후 코드 진행하면서 학습
-        # Build the neural network model
+        class Net(nn.Module):
+            def __init__(self):
+                super(Net, self).__init__()
 
-        hidden_units_l1 = self.hidden_units_l1
-        N_lstm = self.N_lstm
+                hidden_units_l1 = self.hidden_units_l1
+                N_lstm = self.N_lstm
 
-        # torch.nn.LSTM(input_size=5, hidden_size=20, num_layers=1, bias=True, batch_first=True)
-        self.lstm_dnn = nn.LSTM(self.n_lstm_state, N_lstm, batch_first=True)
+                # torch.nn.LSTM(input_size=5, hidden_size=20, num_layers=1, bias=True, batch_first=True)
+                self.lstm_dnn = nn.LSTM(self.n_lstm_state, N_lstm, batch_first=True)
 
-        # Common layers
-        self.fc1 = nn.Linear(N_lstm + self.n_features, hidden_units_l1)
-        self.fc2 = nn.Linear(hidden_units_l1, hidden_units_l1)
-        # Dueling 할지 DQN할지 선택할 수 있음.
-        if self.dueling:
-            # Dueling DQN
-            # Value stream
-            self.value = nn.Linear(hidden_units_l1, 1)
-            # Advantage stream
-            self.advantage = nn.Linear(hidden_units_l1, self.n_actions)
-        else:
-            self.q = nn.Linear(hidden_units_l1, self.n_actions)
+                # Common layers
+                self.fc1 = nn.Linear(N_lstm + self.n_features, hidden_units_l1)
+                self.fc2 = nn.Linear(hidden_units_l1, hidden_units_l1)
+                # Dueling 할지 DQN할지 선택할 수 있음.
+                if self.dueling:
+                    # Dueling DQN
+                    # Value stream
+                    self.value = nn.Linear(hidden_units_l1, 1)
+                    # Advantage stream
+                    self.advantage = nn.Linear(hidden_units_l1, self.n_actions)
+                else:
+                    self.q = nn.Linear(hidden_units_l1, self.n_actions)
 
-    def forward(self, s, lstm_s):
-        # 신경망의 입력으로 상태(s)와 LSTM의 상태(lstm_s)를 받아 최종 Q 값을 계산하여 반환합니다.
-        # Dueling 구조를 사용하는 경우, 가치와 이점을 분리하여 계산한 뒤, 이를 합하여 최종 Q 값을 도출합니다.
-        # Forward pass of the network
+            def forward(self, s, lstm_s):
+                    lstm_out, _ = self.lstm(lstm_s)
+                    lstm_out = lstm_out[:, -1, :]
 
-        lstm_output, _ = self.lstm_dnn(lstm_s)
-        lstm_output_reduced = lstm_output[:, -1, :]
+                    combined = torch.cat((lstm_out, s), dim=1)
+                    l1 = torch.relu(self.fc1(combined))
+                    l2 = torch.relu(self.fc2(l1))
 
-        x = torch.cat((lstm_output_reduced, s), dim=1)
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
+                    if self.dueling:
+                        value = self.value_fc(l2)
+                        advantage = self.advantage_fc(l2)
+                        out = value + (advantage - advantage.mean(dim=1, keepdim=True)) # 수식 26
+                    else:
+                        out = self.fc3(l2)
+                    return out
 
-        if self.dueling:
-            value = self.value(x)
-            advantage = self.advantage(x)
-            q = value + (advantage - advantage.mean(dim=1, keepdim=True))
-        else:
-            q = self.q(x)
-
-        return q
+        return Net()
 
     def store_transition(self, s, lstm_s, a, r, s_, lstm_s_):
         # - 행동(a), 보상(r), 새로운 상태(s_) 등의 경험을 메모리에 저장합니다. 이 정보는 학습 시 사용됩니다.
@@ -120,20 +122,20 @@ class DuelingDoubleDeepQNetwork(nn.Module):
         # - LSTM의 상태를 업데이트합니다. 이는 순차적 정보를 처리하기 위해 사용됩니다.
         self.lstm_history.append(lstm_s)
 
-    def choose_action(self, observation):
+    def choose_action(self, observation): # -> binary decision만 하네 왜?
         # - 현재 관찰(observation)을 바탕으로 행동을 선택합니다.
         # - 엡실론-탐욕(Epsilon-Greedy) 정책을 사용하여 대부분 최적의 행동을 선택하지만, 때때로 탐험을 위해 무작위 행동을 선택합니다.
 
         observation = torch.tensor(observation, dtype=torch.float).unsqueeze(0)
 
-        if np.random.uniform() < self.epsilon:
+        if np.random.uniform() < self.epsilon: # exploitation
             lstm_observation = torch.tensor(np.array(self.lstm_history), dtype=torch.float).unsqueeze(0)
-            actions_value = self.forward(observation, lstm_observation)
+            actions_value = self.eval_net(observation, lstm_observation)
             self.store_q_value.append({'observation': observation, 'q_value': actions_value})
 
-            action = torch.argmax(actions_value, dim=1).item()
-        else:
-            if np.random.randint(0, 100) < 25:
+            action = torch.argmax(actions_value, dim=1).item()  # -> Q-value
+        else: # exploration
+            if np.random.randint(0, 100) < 25: # 1/4 확률
                 action = np.random.randint(1, self.n_actions)
             else:
                 action = 0
@@ -166,9 +168,10 @@ class DuelingDoubleDeepQNetwork(nn.Module):
         lstm_batch_memory = torch.tensor(lstm_batch_memory, dtype=torch.float)
 
         # QT(s(n+1)), QE(s(n+1))/ lstm 셀 10 개를 이어붙인 걸 lstm_dnn에 통과하네?
-        q_next, q_eval4next = self.forward(batch_memory[:, -self.n_features:], lstm_batch_memory[:, :, self.n_lstm_state:]) # ??
+        q_next = self.target_net(batch_memory[:, -self.n_features:], lstm_batch_memory[:, :, self.n_lstm_state:]) # ??
+        q_eval4next = self.eval_net(batch_memory[:, -self.n_features:], lstm_batch_memory[:, :, self.n_lstm_state:]) # ??
 
-        q_eval = self.forward(batch_memory[:, :self.n_features], lstm_batch_memory[:, :, :self.n_lstm_state])
+        q_eval = self.eval_net(batch_memory[:, :self.n_features], lstm_batch_memory[:, :, :self.n_lstm_state])
 
         q_target = q_eval.clone().detach()
         batch_index = np.arange(self.batch_size, dtype=np.int32)

@@ -9,8 +9,8 @@ class MEC:
         # Initialize variables
         self.n_ue          = num_ue
         self.n_edge        = num_edge
-        self.n_time        = num_time
-        self.n_component   = num_component
+        self.n_time        = num_time # N_TIME_SLOT + MAX_DELAY
+        self.n_component   = num_component # 1
         self.max_delay     = max_delay
         self.duration      = Config.DURATION
         self.ue_p_comp     = Config.UE_COMP_ENERGY
@@ -22,11 +22,11 @@ class MEC:
         self.task_count_ue   = 0
         self.task_count_edge = 0
         self.n_actions       = self.n_component + 1
-        self.n_features      = 1 + 1 + 1 + self.n_edge
+        self.n_features      = 1 + 1 + 1 + self.n_edge # observation 과 같음 .
         self.n_lstm_state    = self.n_edge
   
         # Computation and transmission capacities
-        self.comp_cap_ue   = Config.UE_COMP_CAP * np.ones(self.n_ue) * self.duration
+        self.comp_cap_ue   = Config.UE_COMP_CAP * np.ones(self.n_ue) * self.duration # 2.5 * 1* 0.1
         self.comp_cap_edge = Config.EDGE_COMP_CAP * np.ones([self.n_edge]) * self.duration
         self.tran_cap_ue   = Config.UE_TRAN_CAP * np.ones([self.n_ue, self.n_edge]) * self.duration
         self.comp_density  = Config.TASK_COMP_DENS * np.ones([self.n_ue])
@@ -62,7 +62,7 @@ class MEC:
         self.ue_transmission_queue = [queue.Queue() for _ in range(self.n_ue)]
         self.edge_computation_queue = [[queue.Queue() for _ in range(self.n_edge)] for _ in range(self.n_ue)]
         self.edge_ue_m = np.zeros(self.n_edge)
-        self.edge_ue_m_observe = np.zeros(self.n_edge)
+        self.edge_ue_m_observe = np.zeros(self.n_edge) # 모든 Edge의 각각 active한 큐 수
 
         # Task indicator initialization
         self.local_process_task = [{'DIV': np.nan, 'UE_ID': np.nan, 'TASK_ID': np.nan, 'SIZE': np.nan,
@@ -118,7 +118,8 @@ class MEC:
                     np.squeeze(self.b_edge_comp[ue_index, :])])
 
         UEs_lstm_state = np.zeros([self.n_ue, self.n_lstm_state])
-
+        # 이렇게 한 이유는 계산의 편의성을 위해 만든거 같음.
+        # 모든 ue에 대해 LSTM(모든 Edge의 active queue 수)는 동일해야 하므로. np.zeros([n_lstm_state])와 동일함.
         return UEs_OBS, UEs_lstm_state
 
     # perform action, observe state and delay (several steps later)
@@ -130,16 +131,17 @@ class MEC:
         ue_action_edge = np.zeros([self.n_ue], np.int32)
         ue_action_component = np.zeros([self.n_ue], np.int32)-1
 
-        random_list  = []
+        random_list  = [] # [0]
         for i in range(self.n_component):
             random_list.append(i)
 
-        # UE QUEUES UPDATE
+        # UE QUEUES UPDATE # 사용자 장비(UE) 큐 업데이트    # 사용자 장비(UE)별로 액션을 저장할 배열 초기화
         for ue_index in range(self.n_ue):
             component_list = np.zeros([self.n_component], np.int32) - 1
             state_list = np.zeros([self.n_component], np.int32)
             ue_action = action[ue_index]
-            
+
+            # action에 따라 0-> local / 1(or other) -> offload
             if ue_action == 0:
                 ue_action_local[ue_index] = 1
             else:
@@ -148,12 +150,13 @@ class MEC:
                 for i in range(len(sample)):
                     component_list[sample[i]] = np.random.randint(0, self.n_edge)
             
-            ue_action_component[ue_index] = action[ue_index]
+            ue_action_component[ue_index] = action[ue_index] # 0 or 1 -> binary decision
             ue_comp_cap = np.squeeze(self.comp_cap_ue[ue_index])
             ue_comp_density = self.comp_density[ue_index]
             ue_tran_cap = np.squeeze(self.tran_cap_ue[ue_index, :])[1] / self.n_cycle
-            ue_arrive_task = np.squeeze(self.arrive_task[self.time_count, ue_index])
-            
+            ue_arrive_task = np.squeeze(self.arrive_task[self.time_count, ue_index]) # main에서 bitarrive로 초기화 시킴.
+
+            # 작업이 도착했을 때 작업 히스토리 및 큐에 추가
             if ue_arrive_task > 0:
                 self.UE_TASK[ue_index] += 1
                 task_dic = {
@@ -161,12 +164,13 @@ class MEC:
                     'TASK_ID': self.UE_TASK[ue_index],
                     'SIZE': ue_arrive_task,
                     'TIME': self.time_count,
-                    'EDGE': component_list,
+                    'EDGE': component_list, # (1,) 형태의 0~ 4 랜덤 숫자 -> ex) [4]
                     'd_state': state_list,
                     'state': np.nan
                 }
                 self.task_history[ue_index].append(task_dic)
-            
+
+            # 컴포넌트별로 작업을 큐에 추가
             for component in range(self.n_component):
                 temp_dic = {
                     'DIV': component,
@@ -177,23 +181,26 @@ class MEC:
                     'EDGE': component_list[component],
                     'd_state': state_list[component]
                 }
-                
+                # component_list에 edge num이 적혀있으면 edge로 전송, -1이면 local 연산
                 if component_list[component] > -1:
                     self.ue_transmission_queue[ue_index].put(temp_dic)
                 else:
                     self.ue_computation_queue[ue_index].put(temp_dic)
-            
+
+            # 주기별로 컴퓨팅 및 전송 작업 처리
             for cycle in range(self.n_cycle):
                 ue_comp_cap = np.squeeze(self.comp_cap_ue[ue_index]) / self.n_cycle
-
+                # 연산 중인 task가 없고 큐가 비지 않았음 or 전송 중인 task가 없고 큐가 비지 않았음.
                 if ((math.isnan(self.local_process_task[ue_index]['REMAIN']) and (not self.ue_computation_queue[ue_index].empty())) or
                     (math.isnan(self.local_transmit_task[ue_index]['REMAIN']) and (not self.ue_transmission_queue[ue_index].empty()))):
 
-                    # Process UE computation queue
+                    # 로컬 계산 큐 처리
                     if not self.ue_computation_queue[ue_index].empty():
                         while not self.ue_computation_queue[ue_index].empty():
                             task = self.ue_computation_queue[ue_index].get()
                             if task['SIZE'] != 0:
+                                # task처리 시간(현재 시간 - task 할당된 시간) <= 최대 딜레이 시간 이면 locak process(처리중인)task로 지정.
+                                # delay보다 길면 drop
                                 if self.time_count - task['TIME'] + 1 <= self.max_delay:
                                     self.local_process_task[ue_index].update({
                                         'UE_ID': task['UE_ID'],
@@ -204,17 +211,18 @@ class MEC:
                                         'DIV': task['DIV'],
                                     })
                                     break
-                                else:
+                                else: # ques task_history가 어떻게 생겼길래? 4차원 배열?
                                     self.task_history[ue_index][task['TASK_ID']]['d_state'][task['DIV']] = -1
                                     self.process_delay[task['TIME'], ue_index] = self.max_delay
                                     self.unfinish_task[task['TIME'], ue_index] = 1
                     
-                    # Process UE transmission queue
+                    # Process UE transmission queue  # 로컬 전송 큐 처리
                     if not self.ue_transmission_queue[ue_index].empty():
                         while not self.ue_transmission_queue[ue_index].empty():
                             task = self.ue_transmission_queue[ue_index].get()
                             if task['SIZE'] != 0:
                                 if self.time_count - task['TIME'] + 1 <= self.max_delay:
+                                    # ue 전송 큐에서 task을 꺼내, local 전송 task로 update
                                     self.local_transmit_task[ue_index].update({
                                         'UE_ID': task['UE_ID'],
                                         'TASK_ID': task['TASK_ID'],
@@ -230,7 +238,7 @@ class MEC:
                                     self.process_delay[task['TIME'], ue_index] = self.max_delay
                                     self.unfinish_task[task['TIME'], ue_index] = 1
 
-                # PROCESS
+                # PROCESS  # 로컬 계산 작업 처리 , ue가 처리한 bit수(정보), 계산 에너지 정보를 업데이트 한다.
                 if self.local_process_task[ue_index]['REMAIN'] > 0:
                     if self.local_process_task[ue_index]['REMAIN'] >= (ue_comp_cap / ue_comp_density):
                         self.ue_bit_processed[self.local_process_task[ue_index]['TIME'], ue_index] += ue_comp_cap / ue_comp_density
@@ -244,19 +252,20 @@ class MEC:
                         ) / (self.comp_cap_ue[ue_index])
 
                     self.local_process_task[ue_index]['REMAIN'] = self.local_process_task[ue_index]['REMAIN'] - (ue_comp_cap / ue_comp_density)
-                
-                    # if no remain, compute processing delay
+                    # todo
+                    # if no remain, compute processing delay # 남은 작업이 없으면 처리 지연 계산
                     if self.local_process_task[ue_index]['REMAIN'] <= 0:
                         self.task_history[ue_index][self.local_process_task[ue_index]['TASK_ID']]['d_state'][self.local_process_task[ue_index]['DIV']] = 1
                         self.local_process_task[ue_index]['REMAIN'] = np.nan
                         if sum(self.task_history[ue_index][self.local_process_task[ue_index]['TASK_ID']]['d_state']) > self.n_component - 1:
-                            self.process_delay[self.local_process_task[ue_index]['TIME'], ue_index] = self.time_count - self.local_process_task[ue_index]['TIME'] + 1
+                            self.process_delay[self.local_process_task[ue_index]['TIME'], ue_index] = self.time_count - self.local_process_task[ue_index]['TIME'] + 1 # ?
                     elif self.time_count - self.local_process_task[ue_index]['TIME'] + 1 == self.max_delay:
                         self.task_history[ue_index][self.local_process_task[ue_index]['TASK_ID']]['d_state'][self.local_process_task[ue_index]['DIV']] = -1
                         self.local_process_task[ue_index]['REMAIN'] = np.nan
                         self.process_delay[self.local_process_task[ue_index]['TIME'], ue_index] = self.max_delay
                         self.unfinish_task[self.local_process_task[ue_index]['TIME'], ue_index] = 1
-                
+
+                # 로컬 전송 task 처리
                 if self.local_transmit_task[ue_index]['REMAIN'] > 0:
                     if self.local_transmit_task[ue_index]['REMAIN'] >= ue_tran_cap:
                         self.ue_bit_transmitted[self.local_transmit_task[ue_index]['TIME'], ue_index] += ue_tran_cap
@@ -266,7 +275,7 @@ class MEC:
                         self.ue_tran_energy[self.local_transmit_task[ue_index]['TIME'], ue_index] += (self.local_transmit_task[ue_index]['REMAIN'] * self.ue_p_tran) / self.tran_cap_ue[0][0]
                     self.local_transmit_task[ue_index]['REMAIN'] = self.local_transmit_task[ue_index]['REMAIN'] - ue_tran_cap 
 
-                    # UPDATE edge QUEUE
+                    # UPDATE edge QUEUE # 로컬 전송 작업 처리
                     if self.local_transmit_task[ue_index]['REMAIN'] <= 0:
                         tmp_dict = {
                             'UE_ID': self.local_transmit_task[ue_index]['UE_ID'],

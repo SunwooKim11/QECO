@@ -1,5 +1,5 @@
 from MEC_Env import MEC
-from DDQN import DuelingDoubleDeepQNetwork
+from DDQN_torch_my import DuelingDoubleDeepQNetwork
 from Config import Config
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,8 +14,9 @@ else:
     shutil.rmtree("models")
     os.mkdir("models")
 '''
-
+# 보상 값을 계산합니다. 작업이 완료되지 않았으면 패널티를 부과합니다. 그리고 공통으로 계산에 쓰인 에너지 소비를 차감합니다.
 def reward_fun(ue_comp_energy, ue_trans_energy, edge_comp_energy, ue_idle_energy, delay, max_delay, unfinish_task):
+    # edge_comp_energy 값중  e!=0 일때의 generator을 뽑아서 next에 넘겨줌. 그리고 next로 값 추출
     edge_energy  = next((e for e in edge_comp_energy if e != 0), 0)
     idle_energy = next((e for e in ue_idle_energy if e != 0), 0)
     penalty     = -max_delay*4
@@ -26,12 +27,14 @@ def reward_fun(ue_comp_energy, ue_trans_energy, edge_comp_energy, ue_idle_energy
     reward = reward - (ue_comp_energy + ue_trans_energy + edge_energy + idle_energy)
     return reward
 
+# 에피소드 t에서의 UE들의 평균 reward, delay, energy을 계신합니다.
 def monitor_reward(ue_RL_list, episode):
     episode_sum_reward = sum(sum(ue_RL.reward_store[episode]) for ue_RL in ue_RL_list)
     avg_episode_sum_reward = episode_sum_reward / len(ue_RL_list)
     print(f"reward: {avg_episode_sum_reward}")
     return avg_episode_sum_reward
 
+# 에피소드 별로, ue의 task을 연산하는데 걸리는 시간
 def monitor_delay(ue_RL_list, episode):
     delay_ue_list = [sum(ue_RL.delay_store[episode]) for ue_RL in ue_RL_list]
     avg_delay_in_episode = sum(delay_ue_list) / len(delay_ue_list)
@@ -61,7 +64,11 @@ def cal_reward(ue_RL_list):
     print(total_sum_reward, avg_reward)
 
 
+
 def train(ue_RL_list, NUM_EPISODE):
+    # """에피소드별로 평균 보상, 지연, 에너지 소비, 작업 드롭률을 추적하기 위한 리스트들을 초기화하고,
+    #  강화 학습 스텝을 카운팅하는 변수 RL_step을 초기화합니다."""
+
     avg_reward_list = []
     avg_reward_list_2 = []
     avg_delay_list_in_episode = []
@@ -70,17 +77,30 @@ def train(ue_RL_list, NUM_EPISODE):
     RL_step = 0
     a = 1
 
+
+
     for episode in range(NUM_EPISODE):
         print("episode  :", episode)
         print("epsilon  :", ue_RL_list[0].epsilon)
+        # 현재 에피소드 번호와 탐험을 위한 epsilon 값(첫 번째 UE의 에이전트를 참조하여)을 출력합니다.
+
 
         # BITRATE ARRIVAL
+        # 각 UE에 대한 작업 도착을 시뮬레이션합니다.
+        # 이는 각 시간 단계에 대해 임의의 작업 크기와 도착 확률을 생성하고,
+        # 최대 지연 시간을 고려하여 작업 배열을 조정합니다.
+
         bitarrive = np.random.uniform(env.min_arrive_size, env.max_arrive_size, size=[env.n_time, env.n_ue])
-        task_prob = env.task_arrive_prob
+        task_prob = env.task_arrive_prob  # TASK_ARRIVE_PROB: 작업 도착 확률 -> 30% 확률로 task 도착
         bitarrive = bitarrive * (np.random.uniform(0, 1, size=[env.n_time, env.n_ue]) < task_prob)
+        # delay가 발생하여서 뒤에 max_delay만큼은 not bit arrive -> 110-10 = 100 time_slot만 걸리게,, (근데 굳이?)
         bitarrive[-env.max_delay:, :] = np.zeros([env.max_delay, env.n_ue])
+        print('bitarive:', bitarrive) # row 수 = 전체시간, col 수` = ue 개수
 
         # OBSERVATION MATRIX SETTING
+        # 각 시간 단계와 UE에 대한 관찰, LSTM 상태, 행동,
+        # 그리고 다음 상태를 추적하기 위한 history 리스트와 보상 지시자를 초기화합니다.
+
         history = list()
         for time_index in range(env.n_time):
             history.append(list())
@@ -94,12 +114,20 @@ def train(ue_RL_list, NUM_EPISODE):
         reward_indicator = np.zeros([env.n_time, env.n_ue])
 
         # INITIALIZE OBSERVATION
+        # 환경을 초기 상태로 리셋하고, 초기 관찰 및 LSTM 상태를 가져옵니다.
         observation_all, lstm_state_all = env.reset(bitarrive)
 
         # TRAIN DRL
+        # 무한 루프를 시작하여 에이전트가 환경과 상호 작용하게 합니다.
+        # 이 루프는 에피소드가 끝날 때(done == True일 때)까지 계속됩니다.
+
         while True:
 
             # PERFORM ACTION
+            # 각 UE에 대해 행동을 결정하고 저장합니다.
+            #  이는 현재 관찰에 기반하여 각 UE의 에이전트가 최적의 행동을 선택하게 합니다.
+
+            # action_all -> 각 ue의 offloading decision Algorithm1 (line 4~7)
             action_all = np.zeros([env.n_ue])
             for ue_index in range(env.n_ue):
                 observation = np.squeeze(observation_all[ue_index, :])
@@ -107,18 +135,27 @@ def train(ue_RL_list, NUM_EPISODE):
                     # if there is no task, action = 0 (also need to be stored)
                     action_all[ue_index] = 0
                 else:
+                    # Algorithm1 line 7
                     action_all[ue_index] = ue_RL_list[ue_index].choose_action(observation)
-                    if observation[0] != 0:
+                    if observation[0] != 0: # 관측이 되었다면 action store. ques) obeservation(state)가 0 은 무슨 의미? 배열이잖아. -> task가 없다는 의미다.
+                        # DQN에 메모리 저장
                         ue_RL_list[ue_index].do_store_action(episode, env.time_count, action_all[ue_index])
 
             # OBSERVE THE NEXT STATE AND PROCESS DELAY (REWARD)
+            # 선택된 행동을 환경에 적용하고, 다음 상태, LSTM 상태, 그리고 에피소드가 끝났는지 여부를 반환받습니다.
+            # Algorithm1 Line 9-10
+            # action_all = (n_ue, )
             observation_all_, lstm_state_all_, done = env.step(action_all)
 
             # should store this information in EACH time slot
+            # 각 UE에 대한 정보를 업데이트하고, 환경에서 얻은 결과를 기반으로 학습 데이터(트랜지션)를 저장합니다.
+            # LSTM 저장
+            # Algorithm1 Line 11-12 XX
             for ue_index in range(env.n_ue):
                 ue_RL_list[ue_index].update_lstm(lstm_state_all_[ue_index,:])
 
             # STORE MEMORY; STORE TRANSITION IF THE TASK PROCESS DELAY IS JUST UPDATED
+            # observation_all, observation_all_ 차이 env.step 하기 전, 후의 값
             for ue_index in range(env.n_ue):
                 obs = observation_all[ue_index, :]
                 lstm = np.squeeze(lstm_state_all[ue_index, :])
@@ -132,8 +169,9 @@ def train(ue_RL_list, NUM_EPISODE):
                     'observation_': obs_,
                     'lstm_': lstm_
                 })
-
+                # reward_indicator 배열에서 특정 열의 값이 1이아니고, 해당요소의 env.process_delay가 0보다 큰 경우의 인덱스를 찾아 update_index에 저장
                 update_index = np.where((1 - reward_indicator[:,ue_index]) *env.process_delay[:,ue_index] > 0)[0]
+                # print(update_index)
                 if len(update_index) != 0:
                     for time_index in update_index:
                         reward = reward_fun(
@@ -145,6 +183,8 @@ def train(ue_RL_list, NUM_EPISODE):
                             env.max_delay,
                             env.unfinish_task[time_index, ue_index]
                         )
+                        # Training Process Line 10
+                        # transition(현재 state, action, reward, 다음 state)
                         ue_RL_list[ue_index].store_transition(
                             history[time_index][ue_index]['observation'],
                             history[time_index][ue_index]['lstm'],
@@ -173,7 +213,7 @@ def train(ue_RL_list, NUM_EPISODE):
                         )
                         reward_indicator[time_index, ue_index] = 1
 
-
+            # Algorithm2 Training Process Line 18
             # ADD STEP (one step does not mean one store)
             RL_step += 1
 
@@ -181,12 +221,18 @@ def train(ue_RL_list, NUM_EPISODE):
             observation_all = observation_all_
             lstm_state_all = lstm_state_all_
 
+            # Algorithm2 Training Process Line 19-20
             # CONTROL LEARNING START TIME AND FREQUENCY
+            # 일정 스텝마다 모든 UE의 에이전트가 학습을 수행하도록 합니다.
+            # 여기서는 200 스텝 이후부터 10의 배수 스텝마다 학습을 진행합니다.
             if (RL_step > 200) and (RL_step % 10 == 0):
                 for ue in range(env.n_ue):
                     ue_RL_list[ue].learn()
 
             # GAME ENDS
+            # 에피소드가 끝났을 경우(예: 모든 작업이 처리되거나 시간이 끝났을 때),
+            # 작업의 완료 상태, 드롭률, 에너지 소비 등을 계산하고 출력한 후 루프를 종료합니다.
+
             if done:
                 for task in env.task_history:
                     cmpl = drp = 0
@@ -213,6 +259,8 @@ def train(ue_RL_list, NUM_EPISODE):
                                 complete_task += 1
                             elif component_state == -1:
                                 drop_task += 1
+                # MEC line 170 self.task_history[ue_index].append(task_dic)
+                # ?? (MD의 개수)*( MD 0의 history 개수)*n_compnent -> 왜 이렇게 했을까? 1. 모든 MD의 도착 task 수 같음 or 2. 대충 어림잡아 계산
                 cnt = len(env.task_history) * len(env.task_history[0]) * env.n_component
 
                 print("++++++++++++++++++++++")
@@ -237,27 +285,29 @@ def train(ue_RL_list, NUM_EPISODE):
                     num_task_drop_list_in_episode.append(total_drop)
 
                     # Plotting and saving figures
-                    '''
-                    fig, axs = plt.subplots(4, 1, figsize=(8, 16))
+
+                    fig, axs = plt.subplots(5, 1, figsize=(8, 16))
                     axs[0].plot(avg_reward_list, '-')
-                    axs[0].set_ylabel('LSTM')
-                    axs[1].plot(avg_delay_list_in_episode, '-')
-                    axs[1].set_ylabel('r')
-                    axs[2].plot(avg_energy_list_in_episode, '-')
-                    axs[2].set_ylabel('r')
-                    axs[3].plot(num_task_drop_list_in_episode, '-')
-                    axs[3].set_ylabel('r')
+                    axs[0].set_ylabel('LSTM-reward')
+                    axs[1].plot(avg_reward_list_2, '-')
+                    axs[1].set_ylabel('LSTM-avg reward')
+                    axs[2].plot(avg_delay_list_in_episode, '-')
+                    axs[2].set_ylabel('avg delay')
+                    axs[3].plot(avg_energy_list_in_episode, '-')
+                    axs[3].set_ylabel('avg energy')
+                    axs[4].plot(num_task_drop_list_in_episode, '-')
+                    axs[4].set_ylabel('avg num of dropped task')
                     plt.savefig('figures.png')
-                    '''
+
 
                     # Writing data to files
-                    '''
+
                     data = [avg_reward_list, avg_delay_list_in_episode, avg_energy_list_in_episode, num_task_drop_list_in_episode]
                     filenames = ['reward.txt', 'delay.txt', 'energy.txt', 'drop.txt']
                     for i in range(len(data)):
                         with open(filenames[i], 'w') as f:
                             f.write('\n'.join(str(x) for x in data[i]))
-                    '''
+
                 # Process energy
                 ue_bit_processed = sum(sum(env.ue_bit_processed))
                 ue_comp_energy = sum(sum(env.ue_comp_energy))
@@ -278,6 +328,8 @@ def train(ue_RL_list, NUM_EPISODE):
                 print("_________________________________________________")
 
                 break # Training Finished
+
+
 
 
 if __name__ == "__main__":

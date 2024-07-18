@@ -244,9 +244,10 @@ class DuelingDoubleDeepQNetwork:
 
         # obtain q_next (from target_net) (to q_target) and q_eval (from eval_net)
         # minimize（target_q - q_eval）^2
-        # q_target = reward + gamma * q_next
+        # q_target = reward + gamma * q_next -> forward를 하면 구해지는 가?
         # in the size of bacth_memory
-        # q_next, given the next state from batch, what will be the q_next from q_next
+        # next Q을 구하려면 next state가 필요한데, 이를 replay 메모리에서 가져와서 하는 거구나. 이를 다음거라 예상하고.
+        # q_next, given the next state from batch memory, what will be the q_next from q_next
         # q_eval4next, given the next state from batch, what will be the q_eval4next from q_eval
         q_next, q_eval4next = self.sess.run(
             [self.q_next, self.q_eval],  # output
