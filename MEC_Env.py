@@ -56,13 +56,14 @@ class MEC:
         self.t_ue_comp = -np.ones([self.n_ue])
         self.t_ue_tran = -np.ones([self.n_ue])
         self.b_edge_comp = np.zeros([self.n_ue, self.n_edge])
+        # -> the queues length of MD i in ENs at the previous time slot
 
         # Queue initialization
         self.ue_computation_queue = [queue.Queue() for _ in range(self.n_ue)]
         self.ue_transmission_queue = [queue.Queue() for _ in range(self.n_ue)]
         self.edge_computation_queue = [[queue.Queue() for _ in range(self.n_edge)] for _ in range(self.n_ue)]
         self.edge_ue_m = np.zeros(self.n_edge)
-        self.edge_ue_m_observe = np.zeros(self.n_edge) # 모든 Edge의 각각 active한 큐 수
+        self.edge_ue_m_observe = np.zeros(self.n_edge) # 모든 Edge의 각각 active한 큐 수 ->     
 
         # Task indicator initialization
         self.local_process_task = [{'DIV': np.nan, 'UE_ID': np.nan, 'TASK_ID': np.nan, 'SIZE': np.nan,
@@ -146,9 +147,10 @@ class MEC:
                 ue_action_local[ue_index] = 1
             else:
                 ue_action_offload[ue_index] = 1
-                sample = random.sample(random_list, int(ue_action))
+                sample = random.sample(random_list, int(ue_action))  # [0]
                 for i in range(len(sample)):
-                    component_list[sample[i]] = np.random.randint(0, self.n_edge)
+                    component_list[sample[i]] = np.random.randint(0, self.n_edge) # -> 여기를 보면 resouce alocation은 random 임.
+                    # -> ?? 이럴 수가 있나? env(각 en)의 상태를 관랄 하는데, 행동은 binary이다?
             
             ue_action_component[ue_index] = action[ue_index] # 0 or 1 -> binary decision
             ue_comp_cap = np.squeeze(self.comp_cap_ue[ue_index])

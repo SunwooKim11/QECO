@@ -6,6 +6,7 @@ import numpy as np
 import random
 import os
 import shutil
+from sklearn.metrics import r2_score
 
 '''
 if not os.path.exists("models"):
@@ -66,6 +67,7 @@ def cal_reward(ue_RL_list):
 
 
 def train(ue_RL_list, NUM_EPISODE):
+    global n_ue
     # """에피소드별로 평균 보상, 지연, 에너지 소비, 작업 드롭률을 추적하기 위한 리스트들을 초기화하고,
     #  강화 학습 스텝을 카운팅하는 변수 RL_step을 초기화합니다."""
 
@@ -101,7 +103,7 @@ def train(ue_RL_list, NUM_EPISODE):
         # 각 시간 단계와 UE에 대한 관찰, LSTM 상태, 행동,
         # 그리고 다음 상태를 추적하기 위한 history 리스트와 보상 지시자를 초기화합니다.
 
-        history = list()
+        history = list() # [각 타임슬롯][MD i]
         for time_index in range(env.n_time):
             history.append(list())
             for ue_index in range(env.n_ue):
@@ -270,11 +272,12 @@ def train(ue_RL_list, NUM_EPISODE):
                 print("complete_task: ", complete_task)
                 print("drop_task:     ", drop_task)
                 print("++++++++++++++++++++++")
-
+                """
                 if episode % 999 == 0 and episode != 0:
                     os.mkdir("models" + "/" + str(episode))
                     for ue in range(env.n_ue):
                         ue_RL_list[ue].saver.save(ue_RL_list[ue].sess, "models/" + str(episode) +'/'+ str(ue) + "_X_model" +'/model.ckpt', global_step=episode)
+                """
 
                 avg_reward_list.append(-(monitor_reward(ue_RL_list, episode)))
                 if episode % 10 == 0:
@@ -285,7 +288,7 @@ def train(ue_RL_list, NUM_EPISODE):
                     num_task_drop_list_in_episode.append(total_drop)
 
                     # Plotting and saving figures
-
+                    """
                     fig, axs = plt.subplots(5, 1, figsize=(8, 16))
                     axs[0].plot(avg_reward_list, '-')
                     axs[0].set_ylabel('LSTM-reward')
@@ -298,6 +301,7 @@ def train(ue_RL_list, NUM_EPISODE):
                     axs[4].plot(num_task_drop_list_in_episode, '-')
                     axs[4].set_ylabel('avg num of dropped task')
                     plt.savefig('figures.png')
+                    """
 
 
                     # Writing data to files
@@ -329,23 +333,81 @@ def train(ue_RL_list, NUM_EPISODE):
 
                 break # Training Finished
 
+    x=np.array(list(range(0, NUM_EPISODE//10)))
+    x_r = np.array(list(range(0, NUM_EPISODE)))
+    line_reward_1 = np.polyfit(x_r, avg_reward_list, 1)
+    line_reward_2 = np.polyfit(x, avg_reward_list_2, 1)
+    line_delay = np.polyfit(x, avg_delay_list_in_episode, 1)
+    line_energy = np.polyfit(x, avg_energy_list_in_episode, 1)
+    line_drop = np.polyfit(x, num_task_drop_list_in_episode, 1)
+    x_minmax = np.array([0, NUM_EPISODE//10])
+    x_r_minmax = np.array([0, NUM_EPISODE])
 
+    fit_reward_y_1 = x_r_minmax * line_reward_1[0] + line_reward_1[1]
+    fit_reward_y_2 = x_minmax * line_reward_2[0] + line_reward_2[1]
+    fit_delay_y = x_minmax * line_delay[0] + line_delay[1]
+    fit_energy_y = x_minmax * line_energy[0] + line_energy[1]
+    fit_drop_y = x_minmax * line_drop[0] + line_drop[1]
+
+    fig, axs = plt.subplots(5, 1, figsize=(8, 16))
+    axs[0].plot(avg_reward_list, '-')
+    axs[0].set_ylabel('LSTM-reward')
+    axs[0].plot(x_r_minmax, fit_reward_y_1, color='orange')
+    axs[1].plot(avg_reward_list_2, '-')
+    axs[1].set_ylabel('LSTM-avg reward')
+    axs[1].plot(x_minmax, fit_reward_y_2, color='orange')
+    axs[2].plot(avg_delay_list_in_episode, '-')
+    axs[2].set_ylabel('avg delay')
+    axs[2].plot(x_minmax, fit_delay_y, color='orange')
+    axs[3].plot(avg_energy_list_in_episode, '-')
+    axs[3].set_ylabel('avg energy')
+    axs[3].plot(x_minmax, fit_energy_y, color='orange')
+    axs[4].plot(num_task_drop_list_in_episode, '-')
+    axs[4].set_ylabel('avg num of dropped task')
+    axs[4].plot(x_minmax, fit_drop_y, color='orange')
+    plt.savefig('figures.png')
+
+    est_reward_y_1 = x_r*line_reward_1[0] + line_reward_1[1]
+    est_reward_y_2 = x*line_reward_2[0] + line_reward_2[1]
+    est_delay_y = x*line_delay[0] + line_delay[1]
+    est_energy_y = x*line_energy[0] + line_energy[1]
+    est_drop_y = x*line_drop[0] + line_drop[1]
+
+    r2s = [r2_score(avg_reward_list, est_reward_y_1),
+            r2_score(avg_reward_list_2, est_reward_y_2),
+            r2_score(avg_delay_list_in_episode, est_delay_y),
+            r2_score(avg_energy_list_in_episode, est_energy_y),
+            r2_score(num_task_drop_list_in_episode, est_drop_y)]
+
+    print("R2 - Reward :", r2s[0])
+    print("R2 - avg Reward :", r2s[1])
+    print("R2 - Delay :", r2s[2])
+    print("R2 - Energy :", r2s[3])
+    print("R2 - Drop :", r2s[4])
+    r2_file = 'R2-'+str(n_ue)+'.txt'
+    with open(r2_file, 'w') as f:
+      for i in range(len(r2s)):
+        f.write('\n'.join(str(r2s[i])))
 
 
 if __name__ == "__main__":
 
     # GENERATE ENVIRONMENT
-    env = MEC(Config.N_UE, Config.N_EDGE, Config.N_TIME, Config.N_COMPONENT, Config.MAX_DELAY)
+    # n_ue = Config.N_UE
+    n_ue = 110
+    env = MEC(n_ue, Config.N_EDGE, Config.N_TIME, Config.N_COMPONENT, Config.MAX_DELAY)
 
     # GENERATE MULTIPLE CLASSES FOR RL
     ue_RL_list = list()
-    for ue in range(Config.N_UE):
+    for ue in range(n_ue):
         ue_RL_list.append(DuelingDoubleDeepQNetwork(env.n_actions, env.n_features, env.n_lstm_state, env.n_time,
                                                     learning_rate       = Config.LEARNING_RATE,
                                                     reward_decay        = Config.REWARD_DDECAY,
                                                     e_greedy            = Config.E_GREEDY,
                                                     replace_target_iter = Config.N_NETWORK_UPDATE,  # each 200 steps, update target net
                                                     memory_size         = Config.MEMORY_SIZE,  # maximum of memory
+                                                    doLC                = False,  # Local Computing
+                                                    doFO                = False, # Full Offloading
                                                     ))
 
     # LOAD MODEL
@@ -355,6 +417,7 @@ if __name__ == "__main__":
     '''
 
     # TRAIN THE SYSTEM
-    train(ue_RL_list, Config.N_EPISODE)
+    train(ue_RL_list, 500)
+
 
 
