@@ -103,7 +103,7 @@ def train(ue_RL_list, NUM_EPISODE):
         # 각 시간 단계와 UE에 대한 관찰, LSTM 상태, 행동,
         # 그리고 다음 상태를 추적하기 위한 history 리스트와 보상 지시자를 초기화합니다.
 
-        history = list() # [각 타임슬롯][MD i]
+        history = list()
         for time_index in range(env.n_time):
             history.append(list())
             for ue_index in range(env.n_ue):
@@ -264,7 +264,7 @@ def train(ue_RL_list, NUM_EPISODE):
                 # MEC line 170 self.task_history[ue_index].append(task_dic)
                 # ?? (MD의 개수)*( MD 0의 history 개수)*n_compnent -> 왜 이렇게 했을까? 1. 모든 MD의 도착 task 수 같음 or 2. 대충 어림잡아 계산
                 cnt = len(env.task_history) * len(env.task_history[0]) * env.n_component
-
+                print(len(env.task_history), len(env.task_history[0]), cnt)
                 print("++++++++++++++++++++++")
                 print("drrop_rate   : ", full_drop_task/(cnt/env.n_component))
                 print("full_drrop   : ", full_drop_task)
@@ -272,36 +272,17 @@ def train(ue_RL_list, NUM_EPISODE):
                 print("complete_task: ", complete_task)
                 print("drop_task:     ", drop_task)
                 print("++++++++++++++++++++++")
-                """
-                if episode % 999 == 0 and episode != 0:
-                    os.mkdir("models" + "/" + str(episode))
-                    for ue in range(env.n_ue):
-                        ue_RL_list[ue].saver.save(ue_RL_list[ue].sess, "models/" + str(episode) +'/'+ str(ue) + "_X_model" +'/model.ckpt', global_step=episode)
-                """
+
 
                 avg_reward_list.append(-(monitor_reward(ue_RL_list, episode)))
                 if episode % 10 == 0:
                     avg_reward_list_2.append(sum(avg_reward_list[episode-10:episode])/10)
                     avg_delay_list_in_episode.append(monitor_delay(ue_RL_list, episode))
                     avg_energy_list_in_episode.append(monitor_energy(ue_RL_list, episode))
+                    print('avg delay:, energy')
+                    print(avg_delay_list_in_episode, avg_energy_list_in_episode)
                     total_drop = full_drop_task
                     num_task_drop_list_in_episode.append(total_drop)
-
-                    # Plotting and saving figures
-                    """
-                    fig, axs = plt.subplots(5, 1, figsize=(8, 16))
-                    axs[0].plot(avg_reward_list, '-')
-                    axs[0].set_ylabel('LSTM-reward')
-                    axs[1].plot(avg_reward_list_2, '-')
-                    axs[1].set_ylabel('LSTM-avg reward')
-                    axs[2].plot(avg_delay_list_in_episode, '-')
-                    axs[2].set_ylabel('avg delay')
-                    axs[3].plot(avg_energy_list_in_episode, '-')
-                    axs[3].set_ylabel('avg energy')
-                    axs[4].plot(num_task_drop_list_in_episode, '-')
-                    axs[4].set_ylabel('avg num of dropped task')
-                    plt.savefig('figures.png')
-                    """
 
 
                     # Writing data to files
@@ -311,6 +292,10 @@ def train(ue_RL_list, NUM_EPISODE):
                     for i in range(len(data)):
                         with open(filenames[i], 'w') as f:
                             f.write('\n'.join(str(x) for x in data[i]))
+                if episode == 0 or (episode+1)%50 == 0:
+                  drop_rate_list.append(full_drop_task/(cnt/env.n_component))
+                  drop_task_list.append(full_drop_task)
+                  complete_task_list.append(full_complete_task)
 
                 # Process energy
                 ue_bit_processed = sum(sum(env.ue_bit_processed))
@@ -349,23 +334,20 @@ def train(ue_RL_list, NUM_EPISODE):
     fit_energy_y = x_minmax * line_energy[0] + line_energy[1]
     fit_drop_y = x_minmax * line_drop[0] + line_drop[1]
 
-    fig, axs = plt.subplots(5, 1, figsize=(8, 16))
-    axs[0].plot(avg_reward_list, '-')
-    axs[0].set_ylabel('LSTM-reward')
-    axs[0].plot(x_r_minmax, fit_reward_y_1, color='orange')
-    axs[1].plot(avg_reward_list_2, '-')
-    axs[1].set_ylabel('LSTM-avg reward')
-    axs[1].plot(x_minmax, fit_reward_y_2, color='orange')
-    axs[2].plot(avg_delay_list_in_episode, '-')
-    axs[2].set_ylabel('avg delay')
-    axs[2].plot(x_minmax, fit_delay_y, color='orange')
-    axs[3].plot(avg_energy_list_in_episode, '-')
-    axs[3].set_ylabel('avg energy')
-    axs[3].plot(x_minmax, fit_energy_y, color='orange')
-    axs[4].plot(num_task_drop_list_in_episode, '-')
-    axs[4].set_ylabel('avg num of dropped task')
-    axs[4].plot(x_minmax, fit_drop_y, color='orange')
-    plt.savefig('figures.png')
+    fig1, ax1 = plt.subplots(figsize=(8, 8))
+    ax1.plot(avg_delay_list_in_episode, '-')
+    ax1.set_ylabel('Average Delay(ms)')
+    ax1.set_xlabel('epoch 수')
+    ax1.plot(x_minmax, fit_delay_y, color='orange')
+    fig1.savefig('fig-delay.png')
+
+    # 두 번째 그래프를 위한 figure 생성
+    fig2, ax2 = plt.subplots(figsize=(8, 8))
+    ax2.plot(avg_energy_list_in_episode, '-')
+    ax2.set_ylabel('Average Energy(Jx10)')
+    ax2.set_xlabel('epoch 수')
+    ax2.plot(x_minmax, fit_energy_y, color='orange')
+    fig2.savefig('fig-energy.png')
 
     est_reward_y_1 = x_r*line_reward_1[0] + line_reward_1[1]
     est_reward_y_2 = x*line_reward_2[0] + line_reward_2[1]
@@ -382,7 +364,9 @@ def train(ue_RL_list, NUM_EPISODE):
     print("R2 - Reward :", r2s[0])
     print("R2 - avg Reward :", r2s[1])
     print("R2 - Delay :", r2s[2])
+    print("Delay: y = {0}x+{1}".format(line_delay[0], line_delay[1]))
     print("R2 - Energy :", r2s[3])
+    print("Energy: y = {0}x+{1}".format(line_energy[0], line_energy[1]))
     print("R2 - Drop :", r2s[4])
     r2_file = 'R2-'+str(n_ue)+'.txt'
     with open(r2_file, 'w') as f:
