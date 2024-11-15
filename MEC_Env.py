@@ -13,9 +13,9 @@ class MEC:
         self.n_component   = num_component # 1
         self.max_delay     = max_delay
         self.duration      = Config.DURATION
-        self.ue_p_comp     = Config.UE_COMP_ENERGY
-        self.ue_p_tran     = Config.UE_TRAN_ENERGY
-        self.ue_p_idle     = Config.UE_IDLE_ENERGY
+        self.ue_p_comp     = Config.UE_COMP_ENERGY # 연산 E
+        self.ue_p_tran     = Config.UE_TRAN_ENERGY # 전송 E
+        self.ue_p_idle     = Config.UE_IDLE_ENERGY # 대기 E
         self.edge_p_comp   = Config.EDGE_COMP_ENERGY
 
         self.time_count      = 0
@@ -52,7 +52,7 @@ class MEC:
         self.process_delay_trans = np.zeros([self.n_time, self.n_ue])
         self.edge_drop = np.zeros([self.n_ue, self.n_edge])
 
-        # Queue information initialization
+        # Queue information initialization ??
         self.t_ue_comp = -np.ones([self.n_ue])
         self.t_ue_tran = -np.ones([self.n_ue])
         self.b_edge_comp = np.zeros([self.n_ue, self.n_edge])

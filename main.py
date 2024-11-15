@@ -1,5 +1,5 @@
 from MEC_Env import MEC
-from DDQN_torch_my import DuelingDoubleDeepQNetwork
+from DDQN_torch_bilstm import DuelingDoubleDeepQNetwork
 from Config import Config
 import matplotlib.pyplot as plt
 import numpy as np
@@ -102,7 +102,7 @@ def train(ue_RL_list, NUM_EPISODE):
         # OBSERVATION MATRIX SETTING
         # 각 시간 단계와 UE에 대한 관찰, LSTM 상태, 행동,
         # 그리고 다음 상태를 추적하기 위한 history 리스트와 보상 지시자를 초기화합니다.
-
+        # history는 experience의 일부 Algorithm1 Line 12
         history = list()
         for time_index in range(env.n_time):
             history.append(list())
@@ -292,10 +292,10 @@ def train(ue_RL_list, NUM_EPISODE):
                     for i in range(len(data)):
                         with open(filenames[i], 'w') as f:
                             f.write('\n'.join(str(x) for x in data[i]))
-                if episode == 0 or (episode+1)%50 == 0:
-                  drop_rate_list.append(full_drop_task/(cnt/env.n_component))
-                  drop_task_list.append(full_drop_task)
-                  complete_task_list.append(full_complete_task)
+                # if episode == 0 or (episode+1)%50 == 0:
+                #   drop_rate_list.append(full_drop_task/(cnt/env.n_component))
+                #   drop_task_list.append(full_drop_task)
+                #   complete_task_list.append(full_complete_task)
 
                 # Process energy
                 ue_bit_processed = sum(sum(env.ue_bit_processed))

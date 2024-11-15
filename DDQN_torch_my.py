@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from collections import deque
-
+from pytorch_tcn import TCN
 
 class DuelingDoubleDeepQNetwork(nn.Module):
     # - 네트워크의 파라미터들과 함께 여러 중요한 변수를 초기화합니다.
@@ -24,7 +24,7 @@ class DuelingDoubleDeepQNetwork(nn.Module):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
         self.n_actions = n_actions  # self.n_actions = self.n_component + 1 -> 2
-        self.n_features = n_features  # observation과 같음, 8임
+        self.n_features = n_features  # observation과 같음, 8임 -> state에서 파이, H(t) 제외하고 나머지
         self.n_time = n_time
         self.lr = learning_rate
         self.gamma = reward_decay  # 각 rewturn의 계수
@@ -41,8 +41,9 @@ class DuelingDoubleDeepQNetwork(nn.Module):
 
         # lstm
         self.N_lstm = N_lstm  # 20 -> hidden size?
-        self.n_lstm_step = n_lstm_step  # 10 -> ?? 10번의 셀을 하는건가? ex) 0~9번쨰 시계열 데이터 뽑음.
-        self.n_lstm_state = n_lstm_features  # = self.n_edge -> input size
+        self.n_lstm_step = n_lstm_step  # 10 -> seq 길이 ex) 0~9번쨰 시계열 데이터 뽑음.
+        # h_i(t) -> MD i입장에서 봤을 때, 각 큐가 active을 나타내는 집합 ex) {0,1,1,1,0}
+        self.n_lstm_state = n_lstm_features  # = self.n_edge -> input size,/
         # 모든 EN의 active 큐 수를 나타내는 배열이므로 ex) [3, 2, 2, 4, 1], EN이 5개일 때 -> 이게 아닌듯
         # s_, lstm_s_ -> s(t+1)
         # np.hstack((s, [a, r], s_, lstm_s, lstm_s_))
@@ -80,9 +81,17 @@ class DuelingDoubleDeepQNetwork(nn.Module):
                 self.dueling = dueling
 
                 # LSTM layer -> bi-LSTM은 output size가 더 늘어난다. 그러면 hidden_size을 줄여야 하나?
-                # self.lstm = nn.LSTM(input_size=n_lstm_state, hidden_size=n_lstm, batch_first=True)
-                self.lstm = nn.LSTM(input_size=n_lstm_state, hidden_size=n_lstm, batch_first=True, bidirectional=False)
+                # self.lstm = nn.LSTM(input_size=n_lstm_state, hidden_size=n_lstm, batch_first=True, bidirectional=False)
+                self.lstm = TCN(
+                    num_inputs=n_lstm_state,  # 입력 채널 수 5, 예: n_lstm_state (기존 LSTM의 input_size와 동일)
+                    num_channels=[15, 25, 20],  # 각 residual block의 채널 수, 적절한 값을 리스트로 지정
+                    kernel_size=3,  # 예시로 커널 크기를 3으로 설정
+                    dropout=0.1,  # 드롭아웃 비율
+                    causal=True,  # 순차적인 데이터 처리를 위해 causal 설정
+                    input_shape='NLC'  # NLC(Batch_size, time_step, feature_channels) 형태로 설정
+                )
                 # n_lstm_state(n_edge) = 5, hidden_size(n_lstm) = 20
+
                 # Fully connected layers
                 self.fc1 = nn.Linear(n_lstm + n_features, hidden_units_l1) # (28 x 20)
                 self.fc2 = nn.Linear(hidden_units_l1, hidden_units_l1) # (20x20)
@@ -95,7 +104,10 @@ class DuelingDoubleDeepQNetwork(nn.Module):
                     self.fc3 = nn.Linear(hidden_units_l1, n_actions)
 
             def forward(self, s, lstm_s):
-                lstm_out, _ = self.lstm(lstm_s)
+                self.lstm.reset_buffers()
+                # lstm_s.shape = (32, 10, 5) = (bath_size, 시퀀스 길이, input_ size) → TCN에도 적용
+                # inference을 False로 하여, 출력 shpae이 1이 아닌 20으로 되게끔
+                lstm_out = self.lstm(lstm_s, inference = False)
                 # print(lstm_out.shape) # torch.Size([32(batch_size), 10(n_lstm_step), 20(hidden_size)])
                 lstm_out = lstm_out[:, -1, :] # -> 가장 최근의 lstm output 값을 사용하겠다. hidden size = output size??
                 combined = torch.cat((lstm_out, s), dim=1)
@@ -146,9 +158,9 @@ class DuelingDoubleDeepQNetwork(nn.Module):
             lstm_observation = lstm_observation.to(self.device)
             actions_value = self.eval_net(observation, lstm_observation)
             self.store_q_value.append({'observation': observation, 'q_value': actions_value})
-            print("action_value:", actions_value)
+            # print("action_value:", actions_value)
             action = torch.argmax(actions_value, dim=1).item()  # -> Q-value
-            print("action:", action)
+            # print("action:", action)
         else:  # exploration
             if np.random.randint(0, 100) < 25:  # 1/4 확률
                 action = np.random.randint(1, self.n_actions)
