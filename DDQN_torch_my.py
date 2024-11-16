@@ -84,7 +84,7 @@ class DuelingDoubleDeepQNetwork(nn.Module):
                 # self.lstm = nn.LSTM(input_size=n_lstm_state, hidden_size=n_lstm, batch_first=True, bidirectional=False)
                 self.lstm = TCN(
                     num_inputs=n_lstm_state,  # 입력 채널 수 5, 예: n_lstm_state (기존 LSTM의 input_size와 동일)
-                    num_channels=[15, 25, 20],  # 각 residual block의 채널 수, 적절한 값을 리스트로 지정
+                    num_channels=[50, 100, 20],  # 각 residual block의 채널 수, 적절한 값을 리스트로 지정
                     kernel_size=3,  # 예시로 커널 크기를 3으로 설정
                     dropout=0.1,  # 드롭아웃 비율
                     causal=True,  # 순차적인 데이터 처리를 위해 causal 설정
