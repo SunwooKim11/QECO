@@ -2,8 +2,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.amp import GradScaler
+
 from collections import deque
 from pytorch_tcn import TCN
+import gc
 
 class DuelingDoubleDeepQNetwork(nn.Module):
     # - 네트워크의 파라미터들과 함께 여러 중요한 변수를 초기화합니다.
@@ -73,6 +76,8 @@ class DuelingDoubleDeepQNetwork(nn.Module):
             self.lstm_history.append(np.zeros([self.n_lstm_state]))
 
         self.store_q_value = list()  # 얘가 안쓰는데 코드에서?
+        # AMP용 GradScaler 추가
+        self.scaler = GradScaler()
 
     def _build_net(self):
         class Net(nn.Module):
@@ -203,32 +208,35 @@ class DuelingDoubleDeepQNetwork(nn.Module):
         batch_memory = batch_memory.to(self.device)
         lstm_batch_memory = lstm_batch_memory.to(self.device)
         # QT(s(n+1)), QE(s(n+1))/ lstm 셀 10 개를 이어붙인 걸 lstm_dnn에 통과하네?
-        q_next = self.target_net(batch_memory[:, -self.n_features:], lstm_batch_memory[:, :, self.n_lstm_state:])  # ??
-        q_eval4next = self.eval_net(batch_memory[:, -self.n_features:],
-                                    lstm_batch_memory[:, :, self.n_lstm_state:])  # ??
+        # AMP 사용
+        with torch.autocast(device_type='cuda'):
+            q_next = self.target_net(batch_memory[:, -self.n_features:], lstm_batch_memory[:, :, self.n_lstm_state:])
+            q_eval4next = self.eval_net(batch_memory[:, -self.n_features:], lstm_batch_memory[:, :, self.n_lstm_state:])
+            q_eval = self.eval_net(batch_memory[:, :self.n_features], lstm_batch_memory[:, :, :self.n_lstm_state])
 
-        q_eval = self.eval_net(batch_memory[:, :self.n_features], lstm_batch_memory[:, :, :self.n_lstm_state])
+            q_target = q_eval.clone().detach()
+            batch_index = np.arange(self.batch_size, dtype=np.int32)
+            eval_act_index = batch_memory[:, self.n_features].long()
+            reward = batch_memory[:, self.n_features + 1]
 
-        q_target = q_eval.clone().detach()
-        batch_index = np.arange(self.batch_size, dtype=np.int32)
-        eval_act_index = batch_memory[:, self.n_features].long()
-        reward = batch_memory[:, self.n_features + 1]
+            if self.double_q:
+                max_act4next = torch.argmax(q_eval4next, dim=1)  # 수식 29
+                selected_q_next = q_next[batch_index, max_act4next]  # QT(s(n+1), a~; 세타Tn)
+            else:
+                selected_q_next, _ = torch.max(q_next, dim=1)
 
-        if self.double_q:
-            max_act4next = torch.argmax(q_eval4next, dim=1)  # 수식 29
-            selected_q_next = q_next[batch_index, max_act4next]  # QT(s(n+1), a~; 세타Tn)
-        else:
-            selected_q_next, _ = torch.max(q_next, dim=1)
-        # Algorithm2 Line 14, 수식 28
-        q_target[batch_index, eval_act_index] = reward + self.gamma * selected_q_next
+            gamma = torch.tensor(self.gamma, dtype=torch.float32).to(self.device)
+            selected_q_next = selected_q_next.float()
+            q_target[batch_index, eval_act_index] = reward + gamma * selected_q_next
 
-        loss = self.loss_func(q_eval, q_target)
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
+            loss = self.loss_func(q_eval, q_target)
 
-        # epsilon 업데이트
-        self.epsilon = self.epsilon + self.epsilon_increment if self.epsilon < self.epsilon_max else self.epsilon_max
+        # GradScaler를 사용해 역전파
+        self.scaler.scale(loss).backward()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+
+        self.epsilon = min(self.epsilon + self.epsilon_increment, self.epsilon_max)
         self.learn_step_counter += 1
 
     # 각 에피소드에서의 보상, 행동, 지연, 에너지 사용량을 저장합니다. 이 데이터는 학습 과정을 모니터링하거나 분석할 때 유용하게 사용됩니다.

@@ -134,7 +134,7 @@ class DuelingDoubleDeepQNetwork(nn.Module):
         # - LSTM의 상태를 업데이트합니다. 이는 순차적 정보를 처리하기 위해 사용됩니다.
         self.lstm_history.append(lstm_s)
 
-    def choose_action(self, observation):  # -> binary decision만 하네 왜?
+    def choose_action(self, observation):  # -> binary decision
         # - 현재 관찰(observation)을 바탕으로 행동을 선택합니다.
         # - 엡실론-탐욕(Epsilon-Greedy) 정책을 사용하여 대부분 최적의 행동을 선택하지만, 때때로 탐험을 위해 무작위 행동을 선택합니다.
         # Local Computing 시 모든 action -> 0 즉. local
@@ -151,7 +151,7 @@ class DuelingDoubleDeepQNetwork(nn.Module):
             actions_value = self.eval_net(observation, lstm_observation)
             self.store_q_value.append({'observation': observation, 'q_value': actions_value})
             # print("action_value:", actions_value)
-            action = torch.argmax(actions_value, dim=1).item()  # -> Q-value
+            action = torch.argmax(actions_value, dim=1).item()  # row에서 가장 큰 값 반환
             # print("action:", action)
         else:  # exploration
             if np.random.randint(0, 100) < 25:  # 1/4 확률
@@ -165,9 +165,9 @@ class DuelingDoubleDeepQNetwork(nn.Module):
         # - 메모리에서 무작위로 샘플링한 배치를 사용하여 네트워크를 학습합니다.
         # - DDQN의 경우, 타깃 Q 값 계산 시 평가 네트워크의 행동을 선택하고 타깃 네트워크로부터 해당 Q 값을 가져옵니다.
         # - 손실을 계산한 뒤, 역전파를 통해 네트워크의 가중치를 업데이트합니다.
-        if self.learn_step_counter % self.replace_target_iter == 0:
-            # No target network in PyTorch, this step can be omitted.
-            print('\ntarget_params_replaced')
+        # if self.learn_step_counter % self.replace_target_iter == 0:
+        #     # No target network in PyTorch, this step can be omitted.
+        #     print('\ntarget_params_replaced')
 
         if self.memory_counter > self.memory_size:
             sample_index = np.random.choice(self.memory_size - self.n_lstm_step, size=self.batch_size)

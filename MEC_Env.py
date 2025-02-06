@@ -127,10 +127,10 @@ class MEC:
     def step(self, action):
     
         # EXTRACT ACTION FOR EACH ue
-        ue_action_local = np.zeros([self.n_ue], np.int32)
-        ue_action_offload = np.zeros([self.n_ue], np.int32)
-        ue_action_edge = np.zeros([self.n_ue], np.int32)
-        ue_action_component = np.zeros([self.n_ue], np.int32)-1
+        ue_action_local = np.zeros([self.n_ue], np.int32) # local action
+        ue_action_offload = np.zeros([self.n_ue], np.int32) # offload action
+        ue_action_edge = np.zeros([self.n_ue], np.int32) 
+        ue_action_component = np.zeros([self.n_ue], np.int32)-1 # component action
 
         random_list  = [] # [0]
         for i in range(self.n_component):
@@ -140,9 +140,9 @@ class MEC:
         for ue_index in range(self.n_ue):
             component_list = np.zeros([self.n_component], np.int32) - 1
             state_list = np.zeros([self.n_component], np.int32)
-            ue_action = action[ue_index]
+            ue_action = action[ue_index] # len(action) = n_ue = 50
 
-            # action에 따라 0-> local / 1(or other) -> offload
+            # action에 따라 0-> local / 1 (or other) -> offload
             if ue_action == 0:
                 ue_action_local[ue_index] = 1
             else:

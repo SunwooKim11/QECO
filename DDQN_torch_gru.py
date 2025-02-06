@@ -165,9 +165,9 @@ class DuelingDoubleDeepQNetwork(nn.Module):
         # - 메모리에서 무작위로 샘플링한 배치를 사용하여 네트워크를 학습합니다.
         # - DDQN의 경우, 타깃 Q 값 계산 시 평가 네트워크의 행동을 선택하고 타깃 네트워크로부터 해당 Q 값을 가져옵니다.
         # - 손실을 계산한 뒤, 역전파를 통해 네트워크의 가중치를 업데이트합니다.
-        if self.learn_step_counter % self.replace_target_iter == 0:
-            # No target network in PyTorch, this step can be omitted.
-            print('\ntarget_params_replaced')
+        # if self.learn_step_counter % self.replace_target_iter == 0:
+        #     # No target network in PyTorch, this step can be omitted.
+        #     print('\ntarget_params_replaced')
 
         if self.memory_counter > self.memory_size:
             sample_index = np.random.choice(self.memory_size - self.n_lstm_step, size=self.batch_size)

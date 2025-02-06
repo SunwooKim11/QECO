@@ -2,8 +2,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.amp import GradScaler
+
 from collections import deque
 from pytorch_tcn import TCN
+import gc
 
 class DuelingDoubleDeepQNetwork(nn.Module):
     # - 네트워크의 파라미터들과 함께 여러 중요한 변수를 초기화합니다.
@@ -40,7 +43,7 @@ class DuelingDoubleDeepQNetwork(nn.Module):
         self.hidden_units_l1 = hidden_units_l1
 
         # lstm
-        self.N_lstm = N_lstm  # 20 -> shape of hidden state. == proj size(shape)
+        self.N_lstm = N_lstm  # 20 -> hidden size?
         self.n_lstm_step = n_lstm_step  # 10 -> seq 길이 ex) 0~9번쨰 시계열 데이터 뽑음.
         # h_i(t) -> MD i입장에서 봤을 때, 각 큐가 active을 나타내는 집합 ex) {0,1,1,1,0}
         self.n_lstm_state = n_lstm_features  # = self.n_edge -> input size,/
@@ -73,6 +76,8 @@ class DuelingDoubleDeepQNetwork(nn.Module):
             self.lstm_history.append(np.zeros([self.n_lstm_state]))
 
         self.store_q_value = list()  # 얘가 안쓰는데 코드에서?
+        # AMP용 GradScaler 추가
+        self.scaler = GradScaler()
 
     def _build_net(self):
         class Net(nn.Module):
@@ -81,9 +86,16 @@ class DuelingDoubleDeepQNetwork(nn.Module):
                 self.dueling = dueling
 
                 # LSTM layer -> bi-LSTM은 output size가 더 늘어난다. 그러면 hidden_size을 줄여야 하나?
-                # self.lstm = nn.LSTM(input_size=n_lstm_state, hidden_size=n_lstm//2, batch_first=True, bidirectional=True)
-                # self.lstm = nn.GRU(input_size=n_lstm_state, hidden_size=n_lstm, batch_first=True)
-                self.lstm = nn.LSTM(input_size=n_lstm_state, hidden_size=n_lstm, batch_first=True)
+                # self.lstm = nn.LSTM(input_size=n_lstm_state, hidden_size=n_lstm, batch_first=True, bidirectional=False)
+                self.lstm = TCN(
+                    num_inputs=n_lstm_state,  # 입력 채널 수 5, 예: n_lstm_state (기존 LSTM의 input_size와 동일)
+                    num_channels=[15, 25, 20],  # 각 residual block의 채널 수, 적절한 값을 리스트로 지정
+                    kernel_size=3,  # 예시로 커널 크기를 3으로 설정
+                    dropout=0.1,  # 드롭아웃 비율
+                    causal=True,  # 순차적인 데이터 처리를 위해 causal 설정
+                    input_shape='NLC'  # NLC(Batch_size, time_step, feature_channels) 형태로 설정
+                )
+                # 'NLC'로 한 이유 -> LSTM 입력 데이터 size = (32, 10, 5) = (bach_size, 시퀀스 길이, input_size(edge개수))
                 # n_lstm_state(n_edge) = 5, hidden_size(n_lstm) = 20
 
                 # Fully connected layers
@@ -98,9 +110,11 @@ class DuelingDoubleDeepQNetwork(nn.Module):
                     self.fc3 = nn.Linear(hidden_units_l1, n_actions)
 
             def forward(self, s, lstm_s):
+                self.lstm.reset_buffers()
                 # lstm_s.shape = (32, 10, 5) = (bath_size, 시퀀스 길이, input_ size) → TCN에도 적용
                 # inference을 False로 하여, 출력 shpae이 1이 아닌 20으로 되게끔
-                lstm_out, _ = self.lstm(lstm_s)                # print(lstm_out.shape) # torch.Size([32(batch_size), 10(n_lstm_step), 20(hidden_size)])
+                lstm_out = self.lstm(lstm_s, inference = False)
+                # print(lstm_out.shape) # torch.Size([32(batch_size), 10(n_lstm_step), 20(hidden_size)])
                 lstm_out = lstm_out[:, -1, :] # -> 가장 최근의 lstm output 값을 사용하겠다. hidden size = output size??
                 combined = torch.cat((lstm_out, s), dim=1)
 
@@ -185,6 +199,7 @@ class DuelingDoubleDeepQNetwork(nn.Module):
                 # lstm_s, lstm_s_ memory에 저장.
                 lstm_batch_memory[i, j, :] = self.memory[sample_index[i] + j,
                                              self.n_features + 1 + 1 + self.n_features:]
+                print(lstm_batch_memory[i, j, :])
         # test code
 
         # print(lstm_batch_memory[:, :, self.n_lstm_state:].shape) # (32, 10, 5) = (sample_index, n_lstm_step, lstm_s_)

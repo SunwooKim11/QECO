@@ -132,7 +132,7 @@ def train(ue_RL_list, NUM_EPISODE):
             # action_all -> 각 ue의 offloading decision Algorithm1 (line 4~7)
             action_all = np.zeros([env.n_ue])
             for ue_index in range(env.n_ue):
-                observation = np.squeeze(observation_all[ue_index, :])
+                observation = np.squeeze(observation_all[ue_index, :]) # -> 배열 차원을 간단히함. Ex) (1,2) -> (2,)
                 if np.sum(observation) == 0:
                     # if there is no task, action = 0 (also need to be stored)
                     action_all[ue_index] = 0
@@ -378,7 +378,7 @@ if __name__ == "__main__":
 
     # GENERATE ENVIRONMENT
     # n_ue = Config.N_UE
-    n_ue = 110
+    n_ue = 50
     env = MEC(n_ue, Config.N_EDGE, Config.N_TIME, Config.N_COMPONENT, Config.MAX_DELAY)
 
     # GENERATE MULTIPLE CLASSES FOR RL
